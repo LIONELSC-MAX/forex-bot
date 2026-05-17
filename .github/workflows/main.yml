@@ -18,4 +18,7 @@ jobs:
         run: pip install requests pandas
       - name: Run bot
         env:
-          EMAIL_PENGIRIM: ${{ s
+          EMAIL_PENGIRIM: ${{ secrets.EMAIL_PENGIRIM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_PENERIMA: ${{ secrets.EMAIL_PENERIMA }}
+        run: python forex_signal_bot.py
