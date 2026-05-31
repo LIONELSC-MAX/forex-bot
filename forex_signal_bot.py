@@ -1,30 +1,26 @@
 """
-Forex Signal Bot - Versi GRATIS
-=================================
-- Data dari frankfurter.dev/v1 (gratis, tanpa API key)
+Forex Signal Bot - Versi GitHub Actions
+=========================================
+- Jalan SEKALI lalu berhenti (cocok untuk GitHub Actions)
+- Data dari frankfurter.dev (gratis, tanpa API key)
 - Analisis RSI, MACD, EMA
-- Notifikasi Email saat BUY/SELL
+- Kirim email notifikasi saat BUY/SELL
 """
 
 import requests
 import pandas as pd
 import smtplib
-import time
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 
-# ============================================================
-# KONFIGURASI — ISI BAGIAN INI
-# ============================================================
-
-EMAIL_PENGIRIM = "lscyt9@gmail.com"
-EMAIL_PASSWORD = "plnp pkfv xqaj yhol"
-EMAIL_PENERIMA = "Rudytio231@gmail.com"
+# Ambil dari environment variables (GitHub Secrets)
+EMAIL_PENGIRIM = os.environ.get("EMAIL_PENGIRIM", "")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
+EMAIL_PENERIMA = os.environ.get("EMAIL_PENERIMA", "")
 
 PAIRS = [("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY")]
-
-INTERVAL_CEK = 3600  # 1 jam
 
 # ============================================================
 # AMBIL DATA FOREX
@@ -130,13 +126,13 @@ def kirim_email(pair, h):
     print(f"  ✅ Email terkirim!")
 
 # ============================================================
-# LOOP UTAMA
+# MAIN - JALAN SEKALI LALU BERHENTI
 # ============================================================
 
-sinyal_terakhir = {}
+if __name__ == "__main__":
+    print(f"🚀 Forex Signal Bot jalan - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    print(f"📌 Memantau: {', '.join(f'{b}/{t}' for b,t in PAIRS)}")
 
-def cek_semua():
-    print(f"\n{'='*50}\n⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n{'='*50}")
     for base, target in PAIRS:
         pair = f"{base}/{target}"
         print(f"\n📊 Analisis {pair}...")
@@ -149,26 +145,11 @@ def cek_semua():
             print(f"  Sinyal : {h['sinyal']} ({h['kekuatan']})")
             print(f"  Harga  : {h['harga']:.5f} | RSI: {h['rsi']:.2f}")
             print(f"  Alasan : {h['alasan']}")
-            if h["sinyal"] in ("BUY","SELL"):
-                if sinyal_terakhir.get(pair) != h["sinyal"]:
-                    kirim_email(pair, h)
-                    sinyal_terakhir[pair] = h["sinyal"]
-                else:
-                    print("  ℹ️ Sinyal sama, tidak kirim ulang")
+            if h["sinyal"] in ("BUY", "SELL"):
+                kirim_email(pair, h)
             else:
-                print("  ℹ️ HOLD")
-                sinyal_terakhir[pair] = "HOLD"
+                print("  ℹ️ HOLD - tidak ada sinyal")
         except Exception as e:
             print(f"  ❌ Error: {e}")
-        time.sleep(2)
 
-if __name__ == "__main__":
-    print("🚀 Forex Signal Bot (Gratis - Tanpa API Key!)")
-    print(f"📌 Memantau: {', '.join(f'{b}/{t}' for b,t in PAIRS)}")
-    print(f"⏱️  Interval: setiap {INTERVAL_CEK//60} menit")
-    print(f"📧 Notifikasi ke: {EMAIL_PENERIMA}")
-    print("\nTekan Ctrl+C untuk berhenti.\n")
-    while True:
-        cek_semua()
-        print(f"\n⏳ Cek berikutnya dalam {INTERVAL_CEK//60} menit...")
-        time.sleep(INTERVAL_CEK)
+    print("\n✅ Selesai!")
