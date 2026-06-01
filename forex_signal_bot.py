@@ -1,10 +1,10 @@
 """
-Forex Signal Bot - Versi GitHub Actions
-=========================================
-- Jalan SEKALI lalu berhenti (cocok untuk GitHub Actions)
-- Data dari frankfurter.dev (gratis, tanpa API key)
+Forex Signal Bot - Versi Twelve Data
+======================================
+- Data 15 menit dari Twelve Data (gratis)
 - Analisis RSI, MACD, EMA
 - Kirim email notifikasi saat BUY/SELL
+- Jalan sekali lalu berhenti (GitHub Actions)
 """
 
 import requests
@@ -13,42 +13,47 @@ import smtplib
 import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Ambil dari environment variables (GitHub Secrets)
-EMAIL_PENGIRIM = os.environ.get("EMAIL_PENGIRIM", "")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD", "")
-EMAIL_PENERIMA = os.environ.get("EMAIL_PENERIMA", "")
+# Ambil dari GitHub Secrets
+EMAIL_PENGIRIM  = os.environ.get("EMAIL_PENGIRIM", "")
+EMAIL_PASSWORD  = os.environ.get("EMAIL_PASSWORD", "")
+EMAIL_PENERIMA  = os.environ.get("EMAIL_PENERIMA", "")
+TWELVE_API_KEY  = os.environ.get("TWELVE_API_KEY", "")
 
-PAIRS = [("EUR", "USD"), ("GBP", "USD"), ("USD", "JPY")]
+PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
 
 # ============================================================
-# AMBIL DATA FOREX
+# AMBIL DATA FOREX - Twelve Data
 # ============================================================
 
-def ambil_data_forex(base, target):
-    end_date   = datetime.today().strftime("%Y-%m-%d")
-    start_date = (datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d")
-    url = f"https://api.frankfurter.dev/v1/{start_date}..{end_date}?base={base}&symbols={target}"
+def ambil_data_forex(pair):
+    symbol = pair.replace("/", "")
+    url = (
+        f"https://api.twelvedata.com/time_series"
+        f"?symbol={pair}"
+        f"&interval=15min"
+        f"&outputsize=100"
+        f"&apikey={TWELVE_API_KEY}"
+    )
     resp = requests.get(url, timeout=10)
     data = resp.json()
 
-    if "rates" not in data:
-        print(f"  [ERROR] {data}")
+    if "values" not in data:
+        print(f"  [ERROR] {data.get('message', data)}")
         return None
 
     rows = []
-    for date, rates in data["rates"].items():
-        if target in rates:
-            rows.append({"time": date, "close": rates[target]})
-
-    if not rows:
-        return None
+    for item in data["values"]:
+        rows.append({
+            "time":  item["datetime"],
+            "open":  float(item["open"]),
+            "high":  float(item["high"]),
+            "low":   float(item["low"]),
+            "close": float(item["close"]),
+        })
 
     df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
-    df["open"] = df["close"].shift(1).fillna(df["close"])
-    df["high"] = df[["open", "close"]].max(axis=1) * 1.001
-    df["low"]  = df[["open", "close"]].min(axis=1) * 0.999
     return df
 
 # ============================================================
@@ -126,18 +131,18 @@ def kirim_email(pair, h):
     print(f"  ✅ Email terkirim!")
 
 # ============================================================
-# MAIN - JALAN SEKALI LALU BERHENTI
+# MAIN
 # ============================================================
 
 if __name__ == "__main__":
-    print(f"🚀 Forex Signal Bot jalan - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-    print(f"📌 Memantau: {', '.join(f'{b}/{t}' for b,t in PAIRS)}")
+    print(f"🚀 Forex Signal Bot (Twelve Data - 15 menit)")
+    print(f"📌 Memantau: {', '.join(PAIRS)}")
+    print(f"⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
 
-    for base, target in PAIRS:
-        pair = f"{base}/{target}"
-        print(f"\n📊 Analisis {pair}...")
+    for pair in PAIRS:
+        print(f"📊 Analisis {pair}...")
         try:
-            df = ambil_data_forex(base, target)
+            df = ambil_data_forex(pair)
             if df is None or len(df) < 30:
                 print("  ⚠️ Data tidak cukup"); continue
             df = hitung_indikator(df)
