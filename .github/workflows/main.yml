@@ -2,7 +2,7 @@ name: Forex Signal Bot
 
 on:
   schedule:
-    - cron: '0 * * * *'
+- cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -21,4 +21,5 @@ jobs:
           EMAIL_PENGIRIM: ${{ secrets.EMAIL_PENGIRIM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_PENERIMA: ${{ secrets.EMAIL_PENERIMA }}
+          TWELVE_API_KEY: ${{ secrets.TWELVE_API_KEY }}
         run: python forex_signal_bot.py
