@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: forex-ai-monitor-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TWELVEDATA_API_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: SCAN_INTERVAL_SECONDS
+        value: "300"
+      - key: WATCHED_PAIRS
+        value: "EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CHF,NZD/USD"
+      - key: TIMEFRAME
+        value: "4h"
