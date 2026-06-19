@@ -1,0 +1,25 @@
+name: Forex Signal Bot
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests pandas
+      - name: Run bot
+        env:
+          EMAIL_PENGIRIM: ${{ secrets.EMAIL_PENGIRIM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_PENERIMA: ${{ secrets.EMAIL_PENERIMA }}
+          TWELVE_API_KEY: ${{ secrets.TWELVE_API_KEY }}
+        run: python forex_signal_bot.py
