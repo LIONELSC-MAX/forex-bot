@@ -4,6 +4,7 @@ import webpush from 'web-push';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import fs from 'fs';
+import WebSocket from 'ws';
 import { analyzeTechnical } from './technical-analyzer.js';
 
 dotenv.config();
@@ -13,13 +14,13 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const TWELVEDATA_API_KEY = process.env.TWELVEDATA_API_KEY;
+const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const SCAN_INTERVAL_MS = (parseInt(process.env.SCAN_INTERVAL_SECONDS) || 300) * 1000;
 const WATCHED_PAIRS = (process.env.WATCHED_PAIRS || 'EUR/USD,GBP/USD,USD/JPY').split(',').map(p => p.trim());
 const TIMEFRAME = process.env.TIMEFRAME || '4h';
 
-// validasi env wajib - tidak ada lagi ANTHROPIC_API_KEY karena analisis 100% berbasis rumus, gratis
-const requiredEnv = ['TWELVEDATA_API_KEY', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY'];
+// validasi env wajib
+const requiredEnv = ['FINNHUB_API_KEY', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY'];
 const missing = requiredEnv.filter(k => !process.env[k]);
 if (missing.length > 0) {
   console.error('ERROR: environment variable belum diisi:', missing.join(', '));
@@ -33,7 +34,7 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
-// === Penyimpanan sederhana berbasis file JSON (cocok untuk single-user / small scale) ===
+// === Penyimpanan sederhana berbasis file JSON ===
 const DB_FILE = './db.json';
 
 function loadDB() {
@@ -53,7 +54,118 @@ function saveDB(db) {
 
 let db = loadDB();
 
-// === Endpoint: simpan push subscription dari browser ===
+// === Cache harga real-time dari Finnhub WebSocket ===
+// key: "EUR/USD", value: { price, timestamp }
+const realtimePrice = {};
+
+// === Konversi pair ke format Finnhub (OANDA:EUR_USD) ===
+function toFinnhubSymbol(pair) {
+  return 'OANDA:' + pair.replace('/', '_');
+}
+
+// === Finnhub WebSocket: subscribe harga real-time semua pair ===
+let finnhubWs = null;
+
+function connectFinnhubWebSocket() {
+  if (finnhubWs) {
+    try { finnhubWs.terminate(); } catch {}
+  }
+
+  finnhubWs = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_API_KEY}`);
+
+  finnhubWs.on('open', () => {
+    console.log('[Finnhub WS] Terhubung, subscribe pair...');
+    for (const pair of WATCHED_PAIRS) {
+      const symbol = toFinnhubSymbol(pair);
+      finnhubWs.send(JSON.stringify({ type: 'subscribe', symbol }));
+      console.log(`  Subscribe: ${symbol}`);
+    }
+  });
+
+  finnhubWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'trade' && msg.data) {
+        for (const trade of msg.data) {
+          // cari pair yang cocok dari symbol
+          for (const pair of WATCHED_PAIRS) {
+            if (trade.s === toFinnhubSymbol(pair)) {
+              realtimePrice[pair] = {
+                price: trade.p,
+                timestamp: new Date(trade.t).toISOString()
+              };
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Finnhub WS] Parse error:', err.message);
+    }
+  });
+
+  finnhubWs.on('error', (err) => {
+    console.error('[Finnhub WS] Error:', err.message);
+  });
+
+  finnhubWs.on('close', () => {
+    console.log('[Finnhub WS] Koneksi putus, reconnect 5 detik lagi...');
+    setTimeout(connectFinnhubWebSocket, 5000);
+  });
+}
+
+// === Ambil candle historis dari Finnhub REST (untuk analisis teknikal) ===
+// Digunakan saat scan: ambil 20 candle terakhir, lalu timpa harga close terakhir
+// dengan harga real-time dari WebSocket (kalau tersedia)
+function timeframeToFinnhubResolution(tf) {
+  const map = { '1h': '60', '4h': '240', '1day': 'D', '1d': 'D' };
+  return map[tf] || '240';
+}
+
+async function fetchCandles(pair, timeframe) {
+  const symbol = toFinnhubSymbol(pair);
+  const resolution = timeframeToFinnhubResolution(timeframe);
+
+  // hitung from/to: 20 candle terakhir
+  const candleCount = 25; // ambil lebih buat jaga-jaga
+  const secondsPerCandle = { '60': 3600, '240': 14400, 'D': 86400 };
+  const secs = secondsPerCandle[resolution] || 14400;
+  const to = Math.floor(Date.now() / 1000);
+  const from = to - secs * candleCount;
+
+  const url = `https://finnhub.io/api/v1/forex/candle?symbol=${symbol}&resolution=${resolution}&from=${from}&to=${to}&token=${FINNHUB_API_KEY}`;
+
+  const res = await fetch(url);
+  const data = await res.json();
+
+  if (data.s === 'no_data' || !data.c || data.c.length === 0) {
+    throw new Error(`Finnhub tidak ada data untuk ${pair}`);
+  }
+
+  let candles = data.t.map((time, i) => ({
+    time: new Date(time * 1000).toISOString(),
+    open: data.o[i],
+    high: data.h[i],
+    low: data.l[i],
+    close: data.c[i]
+  }));
+
+  // Timpa close candle terakhir dengan harga real-time WebSocket (kalau ada)
+  const rt = realtimePrice[pair];
+  if (rt && candles.length > 0) {
+    const last = candles[candles.length - 1];
+    candles[candles.length - 1] = {
+      ...last,
+      close: rt.price,
+      high: Math.max(last.high, rt.price),
+      low: Math.min(last.low, rt.price)
+    };
+    console.log(`  [RT] ${pair} harga real-time: ${rt.price}`);
+  }
+
+  return candles;
+}
+
+// === Endpoint: simpan push subscription ===
 app.post('/api/subscribe', (req, res) => {
   const subscription = req.body;
   if (!subscription || !subscription.endpoint) {
@@ -74,24 +186,30 @@ app.post('/api/unsubscribe', (req, res) => {
   res.json({ message: 'Unsubscribed' });
 });
 
-// === Endpoint: ambil VAPID public key (dibutuhkan frontend) ===
+// === Endpoint: ambil VAPID public key ===
 app.get('/api/vapid-public-key', (req, res) => {
   res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
-// === Endpoint: lihat hasil analisis terakhir semua pair ===
+// === Endpoint: hasil analisis terakhir ===
 app.get('/api/results', (req, res) => {
   res.json({
     results: db.lastResults,
     pairs: WATCHED_PAIRS,
     timeframe: TIMEFRAME,
-    scanIntervalSeconds: SCAN_INTERVAL_MS / 1000
+    scanIntervalSeconds: SCAN_INTERVAL_MS / 1000,
+    realtimePrices: realtimePrice  // bonus: expose harga RT ke frontend
   });
 });
 
-// === Endpoint: lihat riwayat sinyal ===
+// === Endpoint: riwayat sinyal ===
 app.get('/api/history', (req, res) => {
   res.json({ history: db.history.slice(0, 50) });
+});
+
+// === Endpoint: harga real-time saja (ringan) ===
+app.get('/api/prices', (req, res) => {
+  res.json({ prices: realtimePrice });
 });
 
 // === Endpoint: trigger scan manual ===
@@ -100,32 +218,6 @@ app.post('/api/scan-now', async (req, res) => {
   runScan().catch(err => console.error('Scan manual gagal:', err.message));
 });
 
-// === Ambil data candle dari Twelve Data ===
-async function fetchCandles(pair, timeframe) {
-  const interval = timeframe === '1h' ? '1h' : timeframe === '1day' ? '1day' : '4h';
-  const symbol = pair.replace('/', '/');
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=20&apikey=${TWELVEDATA_API_KEY}`;
-
-  const res = await fetch(url);
-  const data = await res.json();
-
-  if (data.status === 'error' || !data.values) {
-    throw new Error(`Twelve Data error untuk ${pair}: ${data.message || 'unknown error'}`);
-  }
-
-  // data.values urutannya dari terbaru ke terlama, kita balik jadi kronologis
-  return data.values.reverse().map(v => ({
-    time: v.datetime,
-    open: parseFloat(v.open),
-    high: parseFloat(v.high),
-    low: parseFloat(v.low),
-    close: parseFloat(v.close)
-  }));
-}
-
-// Analisis sinyal sekarang dihitung lokal oleh modul technical-analyzer.js
-// (moving average crossover, RSI, deteksi breakout) - tidak ada panggilan API berbayar.
-
 // === Kirim push notification ke semua subscriber ===
 async function sendPushToAll(payload) {
   const payloadStr = JSON.stringify(payload);
@@ -133,7 +225,6 @@ async function sendPushToAll(payload) {
     db.subscriptions.map(sub => webpush.sendNotification(sub, payloadStr))
   );
 
-  // hapus subscription yang sudah tidak valid (410 Gone / 404)
   const stillValid = [];
   results.forEach((r, i) => {
     if (r.status === 'fulfilled') {
@@ -146,7 +237,7 @@ async function sendPushToAll(payload) {
   saveDB(db);
 }
 
-// === Proses scan utama: jalan tiap interval ===
+// === Proses scan utama ===
 async function runScan() {
   console.log(`[${new Date().toISOString()}] Memulai scan ${WATCHED_PAIRS.length} pair...`);
 
@@ -160,6 +251,7 @@ async function runScan() {
         pair,
         timeframe: TIMEFRAME,
         price: lastClose,
+        isRealtime: !!realtimePrice[pair],
         result,
         timestamp: new Date().toISOString()
       };
@@ -169,9 +261,8 @@ async function runScan() {
       db.history = db.history.slice(0, 100);
       saveDB(db);
 
-      console.log(`  ${pair}: ${result.signal} (${result.strength})`);
+      console.log(`  ${pair}: ${result.signal} (${result.strength}) @ ${lastClose}`);
 
-      // hanya kirim notifikasi push kalau sinyal bukan NEUTRAL
       if (result.signal !== 'NEUTRAL') {
         await sendPushToAll({
           title: `Sinyal ${result.signal} — ${pair}`,
@@ -185,7 +276,6 @@ async function runScan() {
         });
       }
 
-      // jeda kecil antar pair supaya tidak membanjiri Twelve Data sekaligus
       await new Promise(r => setTimeout(r, 800));
     } catch (err) {
       console.error(`  Gagal analisis ${pair}:`, err.message);
@@ -195,7 +285,7 @@ async function runScan() {
   console.log(`[${new Date().toISOString()}] Scan selesai.\n`);
 }
 
-// === Jalankan scan otomatis berkala ===
+// === Auto scan berkala ===
 let scanTimer = null;
 function startAutoScan() {
   if (scanTimer) clearInterval(scanTimer);
@@ -212,12 +302,15 @@ app.get('/api/status', (req, res) => {
     watchedPairs: WATCHED_PAIRS,
     timeframe: TIMEFRAME,
     scanIntervalSeconds: SCAN_INTERVAL_MS / 1000,
-    subscriberCount: db.subscriptions.length
+    subscriberCount: db.subscriptions.length,
+    realtimeConnected: finnhubWs?.readyState === WebSocket.OPEN,
+    realtimePairsActive: Object.keys(realtimePrice).length
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Forex AI Monitor backend jalan di port ${PORT}`);
+  console.log(`Forex Monitor backend jalan di port ${PORT}`);
   console.log(`Pair yang dipantau: ${WATCHED_PAIRS.join(', ')}`);
+  connectFinnhubWebSocket();  // sambungkan WebSocket real-time
   startAutoScan();
 });
