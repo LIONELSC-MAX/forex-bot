@@ -91,7 +91,7 @@ function connectFinnhubWebSocket() {
 async function fetchCandles(pair, timeframe) {
   const interval = timeframe === '1h' ? '1h' : timeframe === '1day' ? '1day' : '4h';
   const symbol = pair.replace('/', '/');
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=20&apikey=${TWELVEDATA_API_KEY}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=${interval}&outputsize=100&apikey=${TWELVEDATA_API_KEY}`;
 
   const res = await fetch(url);
   const data = await res.json();
