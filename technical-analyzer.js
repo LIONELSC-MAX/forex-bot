@@ -346,7 +346,7 @@ function analyzeTechnical(candles, pair, timeframe) {
         macdData.histogram !== null &&
         macdData.histogram !== undefined
           ? macdData.histogram.toFixed(decimals)
-          : nullll,
+          : null,
       bbUpper: bb ? bb.upper.toFixed(decimals) : null,
       bbMiddle: bb ? bb.middle.toFixed(decimals) : null,
       bbLower: bb ? bb.lower.toFixed(decimals) : null,
