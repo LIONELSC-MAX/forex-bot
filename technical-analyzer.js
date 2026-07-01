@@ -7,7 +7,7 @@ function average(arr) {
 
 // === EMA (Exponential Moving Average) ===
 function ema(closes, period) {
-  if (closes.length < period) return null;
+  if (closes.length < period) return null; // butuh minimal `period` data
   const k = 2 / (period + 1);
   let emaVal = average(closes.slice(0, period));
   for (let i = period; i < closes.length; i++) {
@@ -25,8 +25,7 @@ function sma(closes, period) {
 // === RSI ===
 function rsi(closes, period = 14) {
   if (closes.length < period + 1) return null;
-  let gains = 0,
-    losses = 0;
+  let gains = 0, losses = 0;
   for (let i = closes.length - period; i < closes.length; i++) {
     const diff = closes[i] - closes[i - 1];
     if (diff > 0) gains += diff;
@@ -40,12 +39,11 @@ function rsi(closes, period = 14) {
 
 // === MACD ===
 function macd(closes) {
-  if (closes.length < 26) return null;
+  if (closes.length < 35) return null; // butuh minimal 35 untuk sinyal akurat
   const ema12 = ema(closes, 12);
   const ema26 = ema(closes, 26);
   if (!ema12 || !ema26) return null;
   const macdLine = ema12 - ema26;
-  // Signal line: EMA9 of MACD (approximate)
   const macdValues = [];
   for (let i = 26; i <= closes.length; i++) {
     const e12 = ema(closes.slice(0, i), 12);
@@ -62,8 +60,7 @@ function bollingerBands(closes, period = 20, multiplier = 2) {
   if (closes.length < period) return null;
   const slice = closes.slice(-period);
   const mid = average(slice);
-  const variance =
-    slice.reduce((sum, v) => sum + Math.pow(v - mid, 2), 0) / period;
+  const variance = slice.reduce((sum, v) => sum + Math.pow(v - mid, 2), 0) / period;
   const std = Math.sqrt(variance);
   return {
     upper: mid + multiplier * std,
@@ -107,10 +104,8 @@ function detectPattern(candles) {
   const aBull = a.close > a.open;
   const bBull = b.close > b.open;
   const cBull = c.close > c.open;
-  if (!aBull && !bBull && cBull && c.close > a.open)
-    return "Reversal bullish (3 candle)";
-  if (aBull && bBull && !cBull && c.close < a.open)
-    return "Reversal bearish (3 candle)";
+  if (!aBull && !bBull && cBull && c.close > a.open) return "Reversal bullish (3 candle)";
+  if (aBull && bBull && !cBull && c.close < a.open) return "Reversal bearish (3 candle)";
   if (aBull && bBull && cBull) return "Tiga candle bullish berurutan";
   if (!aBull && !bBull && !cBull) return "Tiga candle bearish berurutan";
   const bodyC = Math.abs(c.close - c.open);
@@ -123,20 +118,21 @@ function detectPattern(candles) {
 function analyzeTechnical(candles, pair, timeframe) {
   const closes = candles.map((c) => c.close);
   const lastClose = closes[closes.length - 1];
+  const prevClose = closes[closes.length - 2] || lastClose;
   const decimals = pair.includes("JPY") ? 2 : pair.includes("XAU") ? 2 : 5;
 
   // Hitung semua indikator
-  const ma5 = sma(closes, 5);
-  const ma10 = sma(closes, 10);
-  const ma20 = sma(closes, 20);
-  const ema50 = ema(closes, Math.min(50, closes.length));
-  const ema200 = ema(closes, Math.min(200, closes.length));
-  const rsiValue = rsi(closes, 14);
-  const macdData = macd(closes);
-  const bb = bollingerBands(closes, 20);
-  const stoch = stochastic(candles, 14);
-  const atrValue = atr(candles, 14);
-  const pattern = detectPattern(candles);
+  const ma5   = sma(closes, 5);
+  const ma10  = sma(closes, 10);
+  const ma20  = sma(closes, 20);
+  const ema50  = ema(closes, 50);   // FIXED: tidak pakai Math.min
+  const ema200 = ema(closes, 200);  // FIXED: tidak pakai Math.min
+  const rsiValue  = rsi(closes, 14);
+  const macdData  = macd(closes);
+  const bb        = bollingerBands(closes, 20);
+  const stoch     = stochastic(candles, 14);
+  const atrValue  = atr(candles, 14);
+  const pattern   = detectPattern(candles);
 
   // === Scoring per indikator ===
   let bullScore = 0;
@@ -160,24 +156,24 @@ function analyzeTechnical(candles, pair, timeframe) {
   // 2. EMA50 trend
   if (ema50 !== null) {
     if (lastClose > ema50) {
-      bullScore++;
+      bullScore += 1.5;
       signals.push("EMA50_BULL");
       reasons.push("harga di atas EMA50");
     } else {
-      bearScore++;
+      bearScore += 1.5;
       signals.push("EMA50_BEAR");
       reasons.push("harga di bawah EMA50");
     }
   }
 
-  // 3. EMA200 trend jangka panjang (Golden/Death Cross)
+  // 3. EMA200 trend jangka panjang
   if (ema200 !== null) {
     if (lastClose > ema200) {
-      bullScore += 1.5;
+      bullScore += 2;
       signals.push("EMA200_BULL");
       reasons.push("harga di atas EMA200 (uptrend)");
     } else {
-      bearScore += 1.5;
+      bearScore += 2;
       signals.push("EMA200_BEAR");
       reasons.push("harga di bawah EMA200 (downtrend)");
     }
@@ -187,20 +183,20 @@ function analyzeTechnical(candles, pair, timeframe) {
   let rsiNote = "";
   if (rsiValue !== null) {
     if (rsiValue < 30) {
-      bullScore += 1.5;
+      bullScore += 2;
       signals.push("RSI_BULL");
       rsiNote = "RSI oversold";
     } else if (rsiValue > 70) {
-      bearScore += 1.5;
+      bearScore += 2;
       signals.push("RSI_BEAR");
       rsiNote = "RSI overbought";
-    } else if (rsiValue < 45) {
+    } else if (rsiValue >= 50) {
       bullScore += 0.5;
-      rsiNote = "RSI mendekati oversold";
-    } else if (rsiValue > 55) {
+      rsiNote = `RSI ${rsiValue.toFixed(1)} (bullish zone)`;
+    } else {
       bearScore += 0.5;
-      rsiNote = "RSI mendekati overbought";
-    } else rsiNote = "RSI netral";
+      rsiNote = `RSI ${rsiValue.toFixed(1)} (bearish zone)`;
+    }
   }
 
   // 5. MACD
@@ -237,10 +233,10 @@ function analyzeTechnical(candles, pair, timeframe) {
       signals.push("BB_BEAR");
       bbNote = "harga di upper BB (overbought)";
     } else if (lastClose < bb.middle) {
-      bullScore += 0.3;
+      bearScore += 0.3;
       bbNote = "harga di bawah mid BB";
     } else {
-      bearScore += 0.3;
+      bullScore += 0.3;
       bbNote = "harga di atas mid BB";
     }
   }
@@ -256,10 +252,16 @@ function analyzeTechnical(candles, pair, timeframe) {
       bearScore += 1.5;
       signals.push("STOCH_BEAR");
       stochNote = "Stochastic overbought";
-    } else stochNote = `Stochastic ${stoch.toFixed(1)}`;
+    } else if (stoch >= 50) {
+      bullScore += 0.3;
+      stochNote = `Stochastic ${stoch.toFixed(1)}`;
+    } else {
+      bearScore += 0.3;
+      stochNote = `Stochastic ${stoch.toFixed(1)}`;
+    }
   }
 
-  // === Tentukan sinyal — minimal 3 indikator harus sepakat ===
+  // === Tentukan sinyal ===
   const bullSignalCount = signals.filter((s) => s.includes("BULL")).length;
   const bearSignalCount = signals.filter((s) => s.includes("BEAR")).length;
   const diff = Math.abs(bullScore - bearScore);
@@ -275,27 +277,17 @@ function analyzeTechnical(candles, pair, timeframe) {
     strength = diff >= 5 ? "STRONG" : diff >= 3 ? "MODERATE" : "WEAK";
   }
 
-  // Trend berdasarkan EMA
+  // Trend
   const trend =
     ema50 && ema200
-      ? ema50 > ema200 * 1.001
-        ? "UPTREND"
-        : ema50 < ema200 * 0.999
-          ? "DOWNTREND"
-          : "SIDEWAYS"
+      ? ema50 > ema200 * 1.001 ? "UPTREND" : ema50 < ema200 * 0.999 ? "DOWNTREND" : "SIDEWAYS"
       : ma5 && ma20
-        ? ma5 > ma20 * 1.0005
-          ? "UPTREND"
-          : ma5 < ma20 * 0.9995
-            ? "DOWNTREND"
-            : "SIDEWAYS"
+        ? ma5 > ma20 * 1.0005 ? "UPTREND" : ma5 < ma20 * 0.9995 ? "DOWNTREND" : "SIDEWAYS"
         : "SIDEWAYS";
 
-  // SL/TP berbasis ATR (lebih akurat)
+  // SL/TP berbasis ATR
   const atrMul = atrValue || lastClose * 0.001;
-  let entry = lastClose,
-    sl = null,
-    tp = null;
+  let entry = lastClose, sl = null, tp = null;
   if (signal === "BUY") {
     sl = lastClose - atrMul * 1.5;
     tp = lastClose + atrMul * 3;
@@ -318,51 +310,25 @@ function analyzeTechnical(candles, pair, timeframe) {
     entry: entry.toFixed(decimals),
     sl: sl !== null ? sl.toFixed(decimals) : null,
     tp: tp !== null ? tp.toFixed(decimals) : null,
-    summary:
-      summaryParts.join(". ") +
-      `. RSI: ${rsiValue !== null ? rsiValue.toFixed(1) : "N/A"}.`,
-    risk:
-      strength === "STRONG"
-        ? "LOW"
-        : strength === "MODERATE"
-          ? "MEDIUM"
-          : "HIGH",
+    summary: summaryParts.join(". ") + `. RSI: ${rsiValue !== null ? rsiValue.toFixed(1) : "N/A"}.`,
+    risk: strength === "STRONG" ? "LOW" : strength === "MODERATE" ? "MEDIUM" : "HIGH",
     indicators: {
-      ma5: ma5 !== null ? ma5.toFixed(decimals) : null,
-      ma10: ma10 !== null ? ma10.toFixed(decimals) : null,
-      ma20: ma20 !== null ? ma20.toFixed(decimals) : null,
-      ema50: ema50 !== null ? ema50.toFixed(decimals) : null,
+      ma5:   ma5   !== null ? ma5.toFixed(decimals)   : null,
+      ma10:  ma10  !== null ? ma10.toFixed(decimals)  : null,
+      ma20:  ma20  !== null ? ma20.toFixed(decimals)  : null,
+      ema50:  ema50  !== null ? ema50.toFixed(decimals)  : null,
       ema200: ema200 !== null ? ema200.toFixed(decimals) : null,
-      rsi: rsiValue !== null ? rsiValue.toFixed(1) : null,
-      macd: macdData ? macdData.macdLine.toFixed(decimals) : null,
-      macdSignal:
-        macdData &&
-        macdData.signalLine !== null &&
-        macdData.signalLine !== undefined
-          ? macdData.signalLine.toFixed(decimals)
-          : null,
-      macdHistogram:
-        macdData &&
-        macdData.histogram !== null &&
-        macdData.histogram !== undefined
-          ? macdData.histogram.toFixed(decimals)
-          : null,
-      bbUpper: bb ? bb.upper.toFixed(decimals) : null,
+      rsi:  rsiValue  !== null ? rsiValue.toFixed(1)  : null,
+      macd: macdData  ? macdData.macdLine.toFixed(decimals) : null,
+      macdSignal:    macdData && macdData.signalLine  !== null ? macdData.signalLine.toFixed(decimals)  : null,
+      macdHistogram: macdData && macdData.histogram   !== null ? macdData.histogram.toFixed(decimals)   : null,
+      bbUpper:  bb ? bb.upper.toFixed(decimals)  : null,
       bbMiddle: bb ? bb.middle.toFixed(decimals) : null,
-      bbLower: bb ? bb.lower.toFixed(decimals) : null,
+      bbLower:  bb ? bb.lower.toFixed(decimals)  : null,
       stochastic: stoch !== null ? stoch.toFixed(1) : null,
       atr: atrValue !== null ? atrValue.toFixed(decimals) : null,
     },
   };
 }
 
-export {
-  analyzeTechnical,
-  sma,
-  ema,
-  rsi,
-  macd,
-  bollingerBands,
-  stochastic,
-  atr,
-};
+export { analyzeTechnical, sma, ema, rsi, macd, bollingerBands, stochastic, atr };
